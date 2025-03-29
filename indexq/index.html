@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <!-- 保持head部分不变 -->
+</head>
+<body>
+    <!-- 保持HTML结构不变 -->
+
+    <script>
+        // 配置中心（需替换实际值）
+        const CONFIG = {
+            CHAIN: {
+                BSC: {
+                    id: 56,
+                    rpcUrls: ['https://bsc-dataseed1.defibit.io/'],
+                    contract: '0x5c952063c7fc8610FFDB798152D69F0B9550762b',
+                    abi: [
+                        {
+                            "inputs": [
+                                {"name":"name","type":"string"},
+                                {"name":"symbol","type":"string"},
+                                {"name":"totalSupply","type":"uint256"},
+                                {"name":"tokenURI","type":"string"}
+                            ],
+                            "name":"createToken",
+                            "outputs":[],
+                            "stateMutability":"payable",
+                            "type":"function"
+                        }
+                    ]
+                }
+            },
+            IPFS: {
+                gateways: ['https://ipfs.io/ipfs/'],
+                auth: 'Basic ' + btoa('YOUR_INFURA_API_KEY:YOUR_INFURA_SECRET')
+            },
+            FLASHBOTS: {
+                endpoint: 'https://relay.flashbots.net',
+                signKey: 'YOUR_FLASHBOTS_SIGNATURE'
+            }
+        };
+
+        // 修复并增强的核心控制器
+        class MemeFactory {
+            constructor() {
+                this.provider = this.initProvider();
+                this.trader = new AdvancedTrader();
+                this.ipfs = this.initIPFS();
+                this.contract = new ethers.Contract(
+                    CONFIG.CHAIN.BSC.contract,
+                    CONFIG.CHAIN.BSC.abi,
+                    this.provider.getSigner()
+                );
+            }
+
+            initProvider() {
+                return new ethers.providers.FallbackProvider(
+                    CONFIG.CHAIN.BSC.rpcUrls.map(url => 
+                        new ethers.providers.JsonRpcProvider(url)
+                    ),
+                    1 // 至少需要1个可用provider
+                );
+            }
+
+            initIPFS() {
+                return window.IpfsHttpClient.create({
+                    host: 'ipfs.infura.io',
+                    port: 5001,
+                    protocol: 'https',
+                    headers: { authorization: CONFIG.IPFS.auth }
+                });
+            }
+
+            async createToken() {
+                try {
+                    const metadata = await this.prepareMetadata();
+                    const txData = this.buildCreateTx(metadata);
+                    return this.sendTransaction(txData);
+                } catch (error) {
+                    console.error('代币创建失败:', error);
+                    alert(`创建失败: ${error.message}`);
+                }
+            }
+
+            async executeBatch() {
+                try {
+                    const batchData = this.parseBatchInput();
+                    const txs = batchData.map(data => 
+                        this.buildBuyTx(data.address, data.amount)
+                    );
+                    return this.sendBundle(txs);
+                } catch (error) {
+                    console.error('批量交易失败:', error);
+                    alert(`交易失败: ${error.message}`);
+                }
+            }
+
+            // 私有方法实现
+            async prepareMetadata() {
+                const avatarFile = document.getElementById('avatarUpload').files[0];
+                if (!avatarFile) throw new Error('请上传代币头像');
+                
+                // 上传头像到IPFS
+                const avatarBuffer = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(new Uint8Array(reader.result));
+                    reader.onerror = reject;
+                    reader.readAsArrayBuffer(avatarFile);
+                });
+                
+                const { cid: avatarCID } = await this.ipfs.add(avatarBuffer);
+                
+                // 构建元数据
+                return {
+                    name: document.getElementById('tokenName').value,
+                    symbol: document.getElementById('tokenSymbol').value,
+                    website: document.getElementById('website').value,
+                    social: {
+                        twitter: document.getElementById('twitter').value,
+                        telegram: document.getElementById('telegram').value
+                    },
+                    image: `ipfs://${avatarCID}`,
+                    timestamp: new Date().toISOString()
+                };
+            }
+
+            buildCreateTx(metadata) {
+                return this.contract.interface.encodeFunctionData('createToken', [
+                    metadata.name,
+                    metadata.symbol,
+                    ethers.utils.parseEther("1000000"), // 示例供应量
+                    `ipfs://${metadata.image}`
+                ]);
+            }
